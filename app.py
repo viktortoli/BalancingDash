@@ -156,10 +156,8 @@ def _notify_new(alarms: list[Alarm]) -> None:
                 state["last_per_code"][a.code] = a.timestamp
         state["initialized"] = True
         return
-    fresh = [
-        a for a in alarms
-        if a.timestamp > state["last_per_code"].get(a.code, pd.Timestamp.min.tz_localize(_TZ))
-    ]
+    epoch = pd.Timestamp("1970-01-01", tz=_TZ)
+    fresh = [a for a in alarms if a.timestamp > state["last_per_code"].get(a.code, epoch)]
     if not fresh:
         return
     try:
