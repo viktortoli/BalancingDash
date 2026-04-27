@@ -7,8 +7,9 @@ import streamlit as st
 import streamlit.components.v1 as components
 from streamlit_autorefresh import st_autorefresh
 
+import mailer
 import thresholds_store
-from alarms import Thresholds, check_alarms
+from alarms import Alarm, Thresholds, check_alarms
 from transelectrica import _TZ, fetch_merged
 
 POS = "#22c55e"
@@ -121,6 +122,55 @@ def _bucket_key() -> str:
     return pd.Timestamp.now(tz=_TZ).floor("5s").isoformat()
 
 
+@st.cache_resource
+def _sent_state() -> dict:
+    return {"last_per_code": {}, "initialized": False}
+
+
+def _mail_config() -> dict | None:
+    if not hasattr(st, "secrets"):
+        return None
+    required = ("smtp_host", "smtp_user", "smtp_password", "mail_from", "mail_to")
+    if any(not st.secrets.get(k) for k in required):
+        return None
+    to = st.secrets["mail_to"]
+    return dict(
+        host=st.secrets["smtp_host"],
+        port=int(st.secrets.get("smtp_port", 587)),
+        user=st.secrets["smtp_user"],
+        password=st.secrets["smtp_password"],
+        sender=st.secrets["mail_from"],
+        recipients=list(to) if isinstance(to, (list, tuple)) else [to],
+    )
+
+
+def _notify_new(alarms: list[Alarm]) -> None:
+    cfg = _mail_config()
+    if not cfg:
+        return
+    state = _sent_state()
+    if not state["initialized"]:
+        for a in alarms:
+            prev = state["last_per_code"].get(a.code)
+            if prev is None or a.timestamp > prev:
+                state["last_per_code"][a.code] = a.timestamp
+        state["initialized"] = True
+        return
+    fresh = [
+        a for a in alarms
+        if a.timestamp > state["last_per_code"].get(a.code, pd.Timestamp.min.tz_localize(_TZ))
+    ]
+    if not fresh:
+        return
+    try:
+        mailer.send(fresh, **cfg)
+    except Exception as e:
+        st.sidebar.error(f"Mail send failed: {e}")
+        return
+    for a in fresh:
+        state["last_per_code"][a.code] = a.timestamp
+
+
 st.set_page_config(page_title="Transelectrica balancing", layout="wide")
 
 DEFAULTS = _load_thresholds()
@@ -162,6 +212,7 @@ if st.sidebar.button("Refresh now"):
 
 df = _cached_fetch(_bucket_key())
 alarms = check_alarms(df, thresholds=th)
+_notify_new(alarms)
 refresh_ms = _next_refresh_ms(df)
 st_autorefresh(interval=refresh_ms, key="poll")
 
