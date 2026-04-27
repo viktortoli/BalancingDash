@@ -41,10 +41,18 @@ def main() -> int:
     df = fetch_merged()
     alarms = check_alarms(df, thresholds=th)
 
-    state = thresholds_store.load_json(token, gist_id, thresholds_store.STATE_FILE) or {}
+    state = thresholds_store.load_json(token, gist_id, thresholds_store.STATE_FILE)
+    if state is None:
+        last = {}
+        for a in alarms:
+            if a.timestamp.isoformat() > last.get(a.code, ""):
+                last[a.code] = a.timestamp.isoformat()
+        thresholds_store.save_json(token, gist_id, thresholds_store.STATE_FILE, {"last_per_code": last})
+        print(f"first run: initialized state with {len(last)} codes, no mail sent.")
+        return 0
+
     last = state.get("last_per_code", {})
     fresh = [a for a in alarms if a.timestamp.isoformat() > last.get(a.code, "")]
-
     if not fresh:
         print(f"{len(alarms)} alarms, none fresh.")
         return 0
