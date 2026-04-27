@@ -103,22 +103,16 @@ def _render_table_html(df: pd.DataFrame) -> str:
     )
 
 
-def _next_refresh_ms(df: pd.DataFrame) -> int:
-    now = pd.Timestamp.now(tz=_TZ)
-    last_completed_start = now.floor("15min") - INTERVAL
-    if not df.empty and df.index[-1] >= last_completed_start:
-        wait = (now.ceil("15min") - now).total_seconds() + 20
-        return int(max(wait, 5) * 1000)
-    return 5_000
+REFRESH_MS = 2_000
 
 
-@st.cache_data(ttl=5, show_spinner=False)
+@st.cache_data(ttl=10, show_spinner=False)
 def _cached_fetch(cache_key: str) -> pd.DataFrame:
     return fetch_merged()
 
 
 def _bucket_key() -> str:
-    return pd.Timestamp.now(tz=_TZ).floor("5s").isoformat()
+    return pd.Timestamp.now(tz=_TZ).floor("10s").isoformat()
 
 
 
@@ -164,15 +158,14 @@ if st.sidebar.button("Refresh now"):
 
 df = _cached_fetch(_bucket_key())
 alarms = check_alarms(df, thresholds=th)
-refresh_ms = _next_refresh_ms(df)
-st_autorefresh(interval=refresh_ms, key="poll")
+st_autorefresh(interval=REFRESH_MS, key="poll")
 
 left, right = st.columns([4, 1], gap="large")
 
 with left:
     st.subheader("Balancing data, today (Europe/Bucharest)")
     last_ts = df.index[-1] if not df.empty else None
-    st.caption(f"Rows: {len(df)} | Last interval: {last_ts} | Next poll in ~{refresh_ms // 1000}s")
+    st.caption(f"Rows: {len(df)} | Last interval: {last_ts}")
     st.markdown(_render_table_html(df), unsafe_allow_html=True)
     components.html(
         """
