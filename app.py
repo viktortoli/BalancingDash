@@ -162,8 +162,8 @@ def _notify_new(alarms: list[Alarm]) -> None:
         return
     try:
         mailer.send(fresh, **cfg)
-    except Exception as e:
-        st.sidebar.error(f"Mail send failed: {e}")
+    except Exception:
+        st.sidebar.error("Mail send failed.")
         return
     for a in fresh:
         state["last_per_code"][a.code] = a.timestamp
