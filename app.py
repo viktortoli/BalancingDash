@@ -107,18 +107,18 @@ def _next_refresh_ms(df: pd.DataFrame) -> int:
     now = pd.Timestamp.now(tz=_TZ)
     last_completed_start = now.floor("15min") - INTERVAL
     if not df.empty and df.index[-1] >= last_completed_start:
-        wait = (now.ceil("15min") - now).total_seconds() + 30
-        return int(max(wait, 15) * 1000)
-    return 15_000
+        wait = (now.ceil("15min") - now).total_seconds() + 20
+        return int(max(wait, 5) * 1000)
+    return 5_000
 
 
-@st.cache_data(ttl=12, show_spinner=False)
+@st.cache_data(ttl=5, show_spinner=False)
 def _cached_fetch(cache_key: str) -> pd.DataFrame:
     return fetch_merged()
 
 
 def _bucket_key() -> str:
-    return pd.Timestamp.now(tz=_TZ).floor("15s").isoformat()
+    return pd.Timestamp.now(tz=_TZ).floor("5s").isoformat()
 
 
 st.set_page_config(page_title="Transelectrica balancing", layout="wide")
