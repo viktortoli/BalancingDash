@@ -7,7 +7,8 @@ import requests
 
 from alarms import Thresholds
 
-GIST_FILE = "thresholds.json"
+THRESHOLDS_FILE = "thresholds.json"
+STATE_FILE = "state.json"
 _API = "https://api.github.com/gists"
 
 
@@ -19,16 +20,24 @@ def _headers(token: str) -> dict:
     }
 
 
-def load(token: str, gist_id: str) -> dict | None:
+def load_json(token: str, gist_id: str, filename: str) -> dict | None:
     r = requests.get(f"{_API}/{gist_id}", headers=_headers(token), timeout=10)
     r.raise_for_status()
     files = r.json().get("files", {})
-    if GIST_FILE not in files:
+    if filename not in files:
         return None
-    return json.loads(files[GIST_FILE]["content"])
+    return json.loads(files[filename]["content"])
+
+
+def save_json(token: str, gist_id: str, filename: str, obj: dict) -> None:
+    payload = {"files": {filename: {"content": json.dumps(obj, indent=2)}}}
+    r = requests.patch(f"{_API}/{gist_id}", headers=_headers(token), json=payload, timeout=10)
+    r.raise_for_status()
+
+
+def load(token: str, gist_id: str) -> dict | None:
+    return load_json(token, gist_id, THRESHOLDS_FILE)
 
 
 def save(token: str, gist_id: str, thresholds: Thresholds) -> None:
-    payload = {"files": {GIST_FILE: {"content": json.dumps(asdict(thresholds), indent=2)}}}
-    r = requests.patch(f"{_API}/{gist_id}", headers=_headers(token), json=payload, timeout=10)
-    r.raise_for_status()
+    save_json(token, gist_id, THRESHOLDS_FILE, asdict(thresholds))
