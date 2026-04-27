@@ -124,7 +124,8 @@ def _bucket_key() -> str:
 
 @st.cache_resource
 def _sent_state() -> dict:
-    return {"last_per_code": {}, "initialized": False}
+    import threading
+    return {"last_per_code": {}, "initialized": False, "lock": threading.Lock()}
 
 
 def _mail_config() -> dict | None:
@@ -149,24 +150,24 @@ def _notify_new(alarms: list[Alarm]) -> None:
     if not cfg:
         return
     state = _sent_state()
-    if not state["initialized"]:
-        for a in alarms:
-            prev = state["last_per_code"].get(a.code)
-            if prev is None or a.timestamp > prev:
-                state["last_per_code"][a.code] = a.timestamp
-        state["initialized"] = True
-        return
     epoch = pd.Timestamp("1970-01-01", tz=_TZ)
-    fresh = [a for a in alarms if a.timestamp > state["last_per_code"].get(a.code, epoch)]
-    if not fresh:
-        return
+    with state["lock"]:
+        if not state["initialized"]:
+            for a in alarms:
+                prev = state["last_per_code"].get(a.code)
+                if prev is None or a.timestamp > prev:
+                    state["last_per_code"][a.code] = a.timestamp
+            state["initialized"] = True
+            return
+        fresh = [a for a in alarms if a.timestamp > state["last_per_code"].get(a.code, epoch)]
+        if not fresh:
+            return
+        for a in fresh:
+            state["last_per_code"][a.code] = a.timestamp
     try:
         mailer.send(fresh, **cfg)
     except Exception:
         st.sidebar.error("Mail send failed.")
-        return
-    for a in fresh:
-        state["last_per_code"][a.code] = a.timestamp
 
 
 st.set_page_config(page_title="Transelectrica balancing", layout="wide")

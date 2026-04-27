@@ -17,14 +17,14 @@ def send(
     sender: str,
     recipients: list[str],
 ) -> None:
-    items = list(alarms)
+    items = sorted(alarms, key=lambda a: a.timestamp)
     if not items:
         return
-    crit = [a for a in items if a.severity == "Critical"]
-    warn = [a for a in items if a.severity == "Warning"]
-    subject = f"[Balancing] {len(crit)} critical, {len(warn)} warning"
+    crit = sum(1 for a in items if a.severity == "Critical")
+    warn = len(items) - crit
+    subject = f"Balancing {crit}C/{warn}W"
     lines = [
-        f"[{a.severity}] {a.timestamp.strftime('%Y-%m-%d %H:%M %Z')}  {a.code}: {a.message}"
+        f"{a.timestamp.strftime('%H:%M')} [{a.severity[0]}] {a.message}"
         for a in items
     ]
     msg = EmailMessage()
