@@ -29,6 +29,10 @@ _IMB_COLS = {
     "estimatedUnintendedDeviationOutArea": "Estimated unintended deviation OUT area [MWh]",
 }
 
+_SYS_COLS = {
+    "estimatedSystemImbalance": "Estimated system imbalance [MWh]",
+}
+
 
 def _to_utc_iso(ts: datetime) -> str:
     if ts.tzinfo is None:
@@ -82,16 +86,26 @@ def fetch_estimated_imbalance(
     return _to_df(_fetch("estimatedImbalancePrices", s, e, session or requests.Session()), _IMB_COLS)
 
 
+def fetch_estimated_system_imbalance(
+    start: datetime | None = None,
+    end: datetime | None = None,
+    session: requests.Session | None = None,
+) -> pd.DataFrame:
+    s, e = (start, end) if start and end else _default_window()
+    return _to_df(_fetch("estimatedPowerSystemImbalance", s, e, session or requests.Session()), _SYS_COLS)
+
+
 def fetch_merged(
     start: datetime | None = None,
     end: datetime | None = None,
 ) -> pd.DataFrame:
     s, e = (start, end) if start and end else _default_window()
     session = requests.Session()
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with ThreadPoolExecutor(max_workers=3) as pool:
         f_abe = pool.submit(fetch_activated_balancing_energy, s, e, session)
         f_imb = pool.submit(fetch_estimated_imbalance, s, e, session)
-        return f_abe.result().join(f_imb.result(), how="outer")
+        f_sys = pool.submit(fetch_estimated_system_imbalance, s, e, session)
+        return f_abe.result().join(f_imb.result(), how="outer").join(f_sys.result(), how="outer")
 
 
 if __name__ == "__main__":
