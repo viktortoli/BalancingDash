@@ -160,7 +160,9 @@ df = _cached_fetch(_bucket_key())
 alarms = check_alarms(df, thresholds=th)
 st_autorefresh(interval=REFRESH_MS, key="poll")
 
-left, right = st.columns([4, 1], gap="large")
+show_alarms = st.sidebar.checkbox("Show alarms panel", value=True)
+cols = st.columns([6, 1], gap="large") if show_alarms else [st.container()]
+left = cols[0]
 
 with left:
     st.subheader("Balancing data, today (Europe/Bucharest)")
@@ -192,14 +194,15 @@ with left:
         height=0,
     )
 
-with right:
-    st.subheader("Alarms")
-    crit = sum(1 for a in alarms if a.severity == "Critical")
-    warn = sum(1 for a in alarms if a.severity == "Warning")
-    st.caption(f"{crit} critical, {warn} warning")
-    if not alarms:
-        st.success("No alarms.")
-    else:
-        for a in sorted(alarms, key=lambda x: x.timestamp, reverse=True):
-            body = f"**{a.timestamp.strftime('%H:%M')}** {a.message}"
-            (st.error if a.severity == "Critical" else st.warning)(body)
+if show_alarms:
+    with cols[1]:
+        st.subheader("Alarms")
+        crit = sum(1 for a in alarms if a.severity == "Critical")
+        warn = sum(1 for a in alarms if a.severity == "Warning")
+        st.caption(f"{crit} critical, {warn} warning")
+        if not alarms:
+            st.success("No alarms.")
+        else:
+            for a in sorted(alarms, key=lambda x: x.timestamp, reverse=True):
+                body = f"**{a.timestamp.strftime('%H:%M')}** {a.message}"
+                (st.error if a.severity == "Critical" else st.warning)(body)
