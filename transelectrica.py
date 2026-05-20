@@ -33,6 +33,13 @@ _SYS_COLS = {
     "estimatedSystemImbalance": "Estimated system imbalance [MWh]",
 }
 
+_PRICE_COLS = {
+    "aFRR_Up": "aFRR Up [Lei]",
+    "aFRR_Down": "aFRR Down [Lei]",
+    "mFRR_Up_Scheduled": "mFRR Up [Lei]",
+    "mFRR_Down_Scheduled": "mFRR Down [Lei]",
+}
+
 
 def _to_utc_iso(ts: datetime) -> str:
     if ts.tzinfo is None:
@@ -95,17 +102,32 @@ def fetch_estimated_system_imbalance(
     return _to_df(_fetch("estimatedPowerSystemImbalance", s, e, session or requests.Session()), _SYS_COLS)
 
 
+def fetch_marginal_prices(
+    start: datetime | None = None,
+    end: datetime | None = None,
+    session: requests.Session | None = None,
+) -> pd.DataFrame:
+    s, e = (start, end) if start and end else _default_window()
+    return _to_df(_fetch("marginalPricesOverview", s, e, session or requests.Session()), _PRICE_COLS)
+
+
 def fetch_merged(
     start: datetime | None = None,
     end: datetime | None = None,
 ) -> pd.DataFrame:
     s, e = (start, end) if start and end else _default_window()
     session = requests.Session()
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    with ThreadPoolExecutor(max_workers=4) as pool:
         f_abe = pool.submit(fetch_activated_balancing_energy, s, e, session)
         f_imb = pool.submit(fetch_estimated_imbalance, s, e, session)
         f_sys = pool.submit(fetch_estimated_system_imbalance, s, e, session)
-        return f_abe.result().join(f_imb.result(), how="outer").join(f_sys.result(), how="outer")
+        f_prc = pool.submit(fetch_marginal_prices, s, e, session)
+        return (
+            f_abe.result()
+            .join(f_imb.result(), how="outer")
+            .join(f_sys.result(), how="outer")
+            .join(f_prc.result(), how="outer")
+        )
 
 
 if __name__ == "__main__":
