@@ -9,6 +9,7 @@ from streamlit_autorefresh import st_autorefresh
 
 import thresholds_store
 from alarms import Thresholds, check_alarms
+from entsoe_da import DA_COL, get_da_prices
 from transelectrica import _TZ, fetch_merged
 
 POS = "#22c55e"
@@ -115,6 +116,30 @@ def _bucket_key() -> str:
     return pd.Timestamp.now(tz=_TZ).floor("10s").isoformat()
 
 
+def _entsoe_key() -> str | None:
+    if not hasattr(st, "secrets"):
+        return None
+    return st.secrets.get("entsoe_api_key")
+
+
+def _with_da_prices(df: pd.DataFrame) -> tuple[pd.DataFrame, str | None]:
+    key = _entsoe_key()
+    if not key:
+        return df, "DA prices off: add entsoe_api_key to secrets."
+    try:
+        da = get_da_prices(pd.Timestamp.now(tz=_TZ).date(), key)
+    except Exception as e:
+        return df, f"DA prices unavailable: {e}"
+    if da is None or df.empty:
+        return df, None
+    merged = df.join(da, how="left")
+    cols = list(merged.columns)
+    cols.remove(DA_COL)
+    anchor = "Estimated price positive imbalance [Lei/MWh]"
+    cols.insert(cols.index(anchor) + 1 if anchor in cols else len(cols), DA_COL)
+    return merged[cols], None
+
+
 
 
 st.set_page_config(page_title="Transelectrica balancing", layout="wide")
@@ -158,6 +183,7 @@ if st.sidebar.button("Refresh now"):
 
 df = _cached_fetch(_bucket_key())
 alarms = check_alarms(df, thresholds=th)
+df, da_note = _with_da_prices(df)
 st_autorefresh(interval=REFRESH_MS, key="poll")
 
 show_alarms = st.sidebar.checkbox("Show alarms panel", value=True)
@@ -168,6 +194,8 @@ with left:
     st.subheader("Balancing data, today (Europe/Bucharest)")
     last_ts = df.index[-1] if not df.empty else None
     st.caption(f"Rows: {len(df)} | Last interval: {last_ts}")
+    if da_note:
+        st.caption(da_note)
     st.markdown(_render_table_html(df), unsafe_allow_html=True)
     components.html(
         """
