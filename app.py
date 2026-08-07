@@ -130,7 +130,9 @@ def _with_da_prices(df: pd.DataFrame) -> tuple[pd.DataFrame, str | None]:
         da = get_da_prices(pd.Timestamp.now(tz=_TZ).date(), key)
     except Exception as e:
         return df, f"DA prices unavailable: {e}"
-    if da is None or df.empty:
+    if da is None:
+        return df, "DA prices unavailable, retrying shortly."
+    if df.empty:
         return df, None
     merged = df.join(da, how="left")
     cols = list(merged.columns)

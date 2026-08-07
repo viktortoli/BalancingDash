@@ -11,14 +11,18 @@ import requests
 _TZ = ZoneInfo("Europe/Bucharest")
 _ENTSOE_URL = "https://web-api.tp.entsoe.eu/api"
 _BNR_URL = "https://www.bnr.ro/nbrfxrates.xml"
+_ECB_URL = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"
 _RO_EIC = "10YRO-TEL------P"
 
 DA_COL = "DA price [Lei/MWh]"
 
-# Per-day cache: once a day's prices are fetched they are never re-fetched
-# for the lifetime of the process. Failed attempts back off _RETRY_SECONDS
-# so the 2s autorefresh loop does not hammer ENTSO-E.
-_cache: dict[str, pd.DataFrame] = {}
+# Per-day caches: once fetched, never re-fetched for the lifetime of the
+# process. Prices are cached in EUR so a failed FX lookup cannot discard a
+# successful ENTSO-E fetch. Failed attempts back off _RETRY_SECONDS so the
+# 2s autorefresh loop does not hammer the APIs.
+_eur_cache: dict[str, pd.Series] = {}
+_rate_cache: dict[str, float] = {}
+_last_rate: float | None = None
 _last_attempt: dict[str, float] = {}
 _RETRY_SECONDS = 60.0
 
@@ -27,13 +31,40 @@ def _local(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
-def _fetch_eur_ron(session: requests.Session) -> float:
+def _rate_from_bnr(session: requests.Session) -> float:
     r = session.get(_BNR_URL, timeout=30)
     r.raise_for_status()
     for el in ET.fromstring(r.content).iter():
         if _local(el.tag) == "Rate" and el.get("currency") == "EUR":
             return float(el.text) / int(el.get("multiplier") or 1)
     raise ValueError("EUR rate not found in BNR feed")
+
+
+def _rate_from_ecb(session: requests.Session) -> float:
+    r = session.get(_ECB_URL, timeout=30)
+    r.raise_for_status()
+    for el in ET.fromstring(r.content).iter():
+        if _local(el.tag) == "Cube" and el.get("currency") == "RON":
+            return float(el.get("rate"))
+    raise ValueError("RON rate not found in ECB feed")
+
+
+def _get_eur_ron(session: requests.Session) -> float:
+    global _last_rate
+    key = datetime.now(_TZ).date().isoformat()
+    if key in _rate_cache:
+        return _rate_cache[key]
+    for source in (_rate_from_bnr, _rate_from_ecb):
+        try:
+            rate = source(session)
+            _rate_cache[key] = rate
+            _last_rate = rate
+            return rate
+        except Exception:
+            continue
+    if _last_rate is not None:
+        return _last_rate
+    raise ValueError("EUR/RON rate unavailable (BNR and ECB both failed)")
 
 
 _RES_MINUTES = {"PT15M": 15, "PT30M": 30, "PT60M": 60, "P1D": 1440}
@@ -88,12 +119,10 @@ def _parse_da_xml(content: bytes) -> pd.Series:
     return pd.Series({ts: price for ts, (_, price) in best.items()}).sort_index()
 
 
-def _fetch_day(day: date, api_key: str) -> pd.DataFrame:
+def _fetch_eur_prices(day: date, api_key: str, session: requests.Session) -> pd.Series:
     start = datetime(day.year, day.month, day.day, tzinfo=_TZ)
     nxt = day + timedelta(days=1)
     end = datetime(nxt.year, nxt.month, nxt.day, tzinfo=_TZ)
-
-    session = requests.Session()
     params = {
         "securityToken": api_key,
         "documentType": "A44",
@@ -105,14 +134,8 @@ def _fetch_day(day: date, api_key: str) -> pd.DataFrame:
     r = session.get(_ENTSOE_URL, params=params, timeout=30)
     r.raise_for_status()
     eur = _parse_da_xml(r.content).tz_convert(_TZ)
-
-    rate = _fetch_eur_ron(session)
     grid = pd.date_range(start, end, freq="15min", inclusive="left")
-    lei = eur.reindex(grid, method="ffill").mul(rate).round(2)
-    df = lei.to_frame(DA_COL)
-    df.index.name = "Time interval"
-    df.attrs["eur_ron"] = rate
-    return df
+    return eur.reindex(grid, method="ffill")
 
 
 def get_da_prices(day: date, api_key: str) -> pd.DataFrame | None:
@@ -122,15 +145,20 @@ def get_da_prices(day: date, api_key: str) -> pd.DataFrame | None:
     None while backing off after a failed attempt.
     """
     key = day.isoformat()
-    if key in _cache:
-        return _cache[key]
-    now = time.monotonic()
-    if now - _last_attempt.get(key, float("-inf")) < _RETRY_SECONDS:
-        return None
-    _last_attempt[key] = now
-    df = _fetch_day(day, api_key)
-    if not df[DA_COL].dropna().empty:
-        _cache[key] = df
+    session = requests.Session()
+    eur = _eur_cache.get(key)
+    if eur is None:
+        now = time.monotonic()
+        if now - _last_attempt.get(key, float("-inf")) < _RETRY_SECONDS:
+            return None
+        _last_attempt[key] = now
+        eur = _fetch_eur_prices(day, api_key, session)
+        if not eur.dropna().empty:
+            _eur_cache[key] = eur
+    rate = _get_eur_ron(session)
+    df = eur.mul(rate).round(2).to_frame(DA_COL)
+    df.index.name = "Time interval"
+    df.attrs["eur_ron"] = rate
     return df
 
 
