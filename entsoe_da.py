@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import time
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -24,7 +26,27 @@ _eur_cache: dict[str, pd.Series] = {}
 _rate_cache: dict[str, float] = {}
 _last_rate: float | None = None
 _last_attempt: dict[str, float] = {}
+_rate_last_attempt: float = float("-inf")
 _RETRY_SECONDS = 60.0
+
+# Last good EUR/RON rate survives process restarts via this file; the seed
+# constant is only used if no live fetch ever succeeded and no file exists.
+_RATE_FILE = Path(__file__).with_name(".fx_rate.json")
+_SEED_RATE = 5.2543  # ECB fixing 2026-08-07
+
+
+def _load_stored_rate() -> float | None:
+    try:
+        return float(json.loads(_RATE_FILE.read_text())["rate"])
+    except Exception:
+        return None
+
+
+def _store_rate(rate: float) -> None:
+    try:
+        _RATE_FILE.write_text(json.dumps({"rate": rate, "date": datetime.now(_TZ).date().isoformat()}))
+    except OSError:
+        pass
 
 
 def _local(tag: str) -> str:
@@ -50,21 +72,26 @@ def _rate_from_ecb(session: requests.Session) -> float:
 
 
 def _get_eur_ron(session: requests.Session) -> float:
-    global _last_rate
+    """Today's EUR/RON rate; on outage falls back to the latest known rate."""
+    global _last_rate, _rate_last_attempt
     key = datetime.now(_TZ).date().isoformat()
     if key in _rate_cache:
         return _rate_cache[key]
-    for source in (_rate_from_bnr, _rate_from_ecb):
-        try:
-            rate = source(session)
-            _rate_cache[key] = rate
-            _last_rate = rate
-            return rate
-        except Exception:
-            continue
-    if _last_rate is not None:
-        return _last_rate
-    raise ValueError("EUR/RON rate unavailable (BNR and ECB both failed)")
+    now = time.monotonic()
+    if now - _rate_last_attempt >= _RETRY_SECONDS:
+        _rate_last_attempt = now
+        for source in (_rate_from_bnr, _rate_from_ecb):
+            try:
+                rate = source(session)
+                _rate_cache[key] = rate
+                _last_rate = rate
+                _store_rate(rate)
+                return rate
+            except Exception:
+                continue
+    if _last_rate is None:
+        _last_rate = _load_stored_rate() or _SEED_RATE
+    return _last_rate
 
 
 _RES_MINUTES = {"PT15M": 15, "PT30M": 30, "PT60M": 60, "P1D": 1440}
